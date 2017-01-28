@@ -16,7 +16,7 @@ math.randomseed(0) -- deterministic, please
 function configure(parser)
 	parser:option("-m --memory", "Memory size in GB."):default("1"):convert(tonumber)
 	parser:option("-f --filter", "pcap filter to use."):default("host 10.0.0.0")
-	parser:option("--fixed-size", "Use a fixed packet size instead of a realistic distribution."):target("fixedSize")
+	parser:option("--fixed-size", "Use a fixed packet size instead of a realistic distribution."):target("fixedSize"):convert(tonumber)
 	parser:option("-r --runs", "Repeat the test n times."):default("1"):convert(tonumber)
 	parser:mutex(
 		parser:flag("--packed", "No alignment"),
@@ -52,20 +52,23 @@ local function makeTemplate()
 	return mem:getData(), pkt
 end
 
+local ceil = math.ceil
 local function noAlign(num)
 	return num
 end
 local function alignEven(num)
 	-- this only prevents odd boundaries
-	return math.ceil(num / 2) * 2
+	--return ceil(num / 2) * 2
+	return num + bit.band(num + 0ULL, 1ULL)
 end
 local function alignL3(num)
 	-- this aligns the l3 header with the struct above, cf. figure in the paper
-	return math.ceil(num / 4) * 4
+	--return ceil(num / 4) * 4
+	return bit.band(num + 0ULL, bit.bnot(3ULL)) + 4 * bit.bor(bit.band(num, 1), bit.rshift(bit.band(num, 2), 1))
 end
 local function alignL2(num)
 	-- packet data starts add +10 bytes
-	return math.ceil((num + 2) / 4) * 4 - 2
+	return alignL3(num + 2) - 2
 end
 
 local voidPtr = ffi.typeof("void*")
@@ -131,6 +134,7 @@ function master(args)
 		numPkts = numPkts + 1
 	end
 	local times, pktRates, dataRates = {}, {}, {}
+	--(require"jit.dump").on()
 	for i = 1, args.runs do
 		log:info("Running test run %d/%d", i, args.runs)
 		local time, pktRate, dataRate = runTest(mem, memSize, numPkts, align, pf.compile_filter(args.filter))

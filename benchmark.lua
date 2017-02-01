@@ -7,6 +7,7 @@ local memory = require "memory"
 local pf = require "pf"
 local ffi = require "ffi"
 local stats = require "stats"
+local jit = require "jit"
 
 -- we don't want dpdk
 lm.config.skipInit = true
@@ -126,7 +127,7 @@ function master(args)
 		templatePkt.ip4.dst.uint8[0] = math.random(0, 255)
 		--pkt.ip4.dst.uint8[3] = math.random(0, 255)
 		-- TODO: this is slow but the partial checksum update is not yet in mainline libmoon
-		templatePkt:calculateIp4Checksum()
+		--templatePkt:calculateIp4Checksum()
 		local pkt = packetType(voidPtr(mem + i))
 		pkt.length = size
 		ffi.copy(pkt.data, template, 48) -- headers are sufficient, other stuff is zero-initialized
@@ -142,6 +143,7 @@ function master(args)
 		pktRates[#pktRates + 1] = pktRate / 10^6 -- mpps
 		dataRates[#dataRates + 1] = dataRate / 10^9 -- gbit
 		print()
+		jit.flush()
 	end
 	if args.runs > 1 then
 		log:info("Averages:")

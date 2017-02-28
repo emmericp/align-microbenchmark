@@ -33,14 +33,16 @@ function configure(parser)
 	return args
 end
 
-local packetType = ffi.typeof([[
-	struct __attribute__((__packed__)) {
-		uint64_t metadata; // combination of timestamp and vlan tag in FlowScope
-		uint16_t length;
-		uint8_t data[]; // packet data, we will try to align either the l2 or the l3 header here
-	}*
-]])
-local headerSize = ffi.sizeof(packetType)
+ffi.cdef [[
+	struct __attribute__((__packed__)) packet_header {
+                uint64_t metadata; // combination of timestamp and vlan tag in FlowScope
+                uint16_t length;
+                uint8_t data[]; // packet data, we will try to align either the l2 or the l3 header here
+        };
+]]
+
+local packetType = ffi.typeof("struct packet_header *")
+local headerSize = ffi.sizeof("struct packet_header")
 
 local function makeTemplate()
 	local mem = { mem = memory.alloc("void*", 1518), getData = function(self) return self.mem end }
@@ -115,6 +117,7 @@ function master(args)
 	local template, templatePkt = makeTemplate()
 	local i = 0
 	local numPkts = 0
+	log:info("Header size: " .. headerSize)
 	log:info("Generating packets in memory.")
 	while true do
 		local size = args.fixedSize or randomSize()

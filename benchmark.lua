@@ -20,6 +20,7 @@ function configure(parser)
 	parser:option("--fixed-size", "Use a fixed packet size instead of a realistic distribution."):target("fixedSize"):convert(tonumber)
 	parser:option("-r --runs", "Repeat the test n times."):default("1"):convert(tonumber)
 	parser:option("--alignment", "Align to Nth byte."):default("1"):convert(tonumber)
+	parser:option("--offset", "Move alignment by n bytes."):default("0"):convert(tonumber)
 	parser:flag("--null-filter", "Overwrites filter with catchall."):target("NullFilter")
 	parser:mutex(
 		parser:flag("--packed", "No alignment"),
@@ -124,6 +125,13 @@ local function randomSize()
 	--return math.random(60, 92)
 end
 
+function allocIndex(size)
+    local mem = memory.allocHuge("uint8_t*", memSize)
+    local idx = memory.allocHuge("uint8_t*", memSize/64)
+    
+    return mem, idx
+end
+
 function master(args)
 	local align =
 		   args.packed and noAlign
@@ -131,7 +139,7 @@ function master(args)
 		or args.l3Aligned and alignL3
 		or args.evenAligned and alignEven
 		or args.B8Aligned and align8
-		or args.NAligned and function(num) return align(num, args.alignment) end
+		or args.NAligned and function(num) return align(num, args.alignment) + args.offset end
 		or error("no alignment specified")
 	local memSize = args.memory * 2^30
 	local mem = memory.allocHuge("uint8_t*", memSize)
@@ -175,7 +183,7 @@ function master(args)
 		pktRates[#pktRates + 1] = pktRate / 10^6 -- mpps
 		dataRates[#dataRates + 1] = dataRate / 10^9 -- gbit
 		print()
-		jit.flush()
+		--jit.flush()
 	end
 	if args.runs > 1 then
 		log:info("Averages:")

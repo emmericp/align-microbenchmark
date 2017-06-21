@@ -8,6 +8,7 @@ local pf = require "pf"
 local ffi = require "ffi"
 local stats = require "stats"
 local jit = require "jit"
+require "utils"
 
 -- we don't want dpdk
 lm.config.skipInit = true
@@ -41,10 +42,10 @@ end
 
 ffi.cdef [[
 	struct __attribute__((__packed__)) packet_header {
-                uint64_t metadata; // combination of timestamp and vlan tag in FlowScope
-                uint16_t length;
-                uint8_t data[]; // packet data, we will try to align either the l2 or the l3 header here
-        };
+		uint64_t metadata; // combination of timestamp and vlan tag in FlowScope
+		uint16_t length;
+		uint8_t data[]; // packet data, we will try to align either the l2 or the l3 header here
+	};
 ]]
 
 local packetType = ffi.typeof("struct packet_header *")
@@ -92,28 +93,35 @@ end
 
 local voidPtr = ffi.typeof("void*")
 
-local function runTest(mem, memSize, numPkts, align, filter)
-	local i = 0
+local function runTest(mem, idx, numPkts, numData, align, filter)
+	if mem[align(0)] ~= 0xef or mem[align(0)+1] ~= 0xbe then
+		log:error("Memory corruption in buffer detected")
+		print("Mem", mem)
+		print("idx", idx, idx+numPkts)
+		dumpHex(mem, 64)
+		local parsedPkt = packet.getUdp4Packet({getData = function() return voidPtr(idx[0].data) end})
+		parsedPkt:dump()
+		return
+	end
+	
 	local match, discard = 0, 0
 	local start = getMonotonicTime() -- can't use libmoon.getTime() without initializing DPDK
-	local data = 0
-	for pkt = 1, numPkts do
-		i = align(i)
-		local pkt = packetType(voidPtr(mem + i))
+	for i = 0, numPkts - 1 do
+		local pkt = idx[i]
 		local size = pkt.length
 		if filter(pkt.data, size) then
 			match = match + 1
 		else
 			discard = discard + 1
 		end
-		i = i + size + headerSize
-		--data = data + size
 	end
 	local stop = getMonotonicTime()
 	local time = stop - start
+	if match + discard ~= numPkts then
+		log:error("Packet counter do not match, %d should be %d", match + discard, numPkts)
+	end
 	local pktRate = (match + discard) / time
-	local dataRate = memSize * 8 / time
-	--local dataRate = data * 8 / time
+	local dataRate = numData * 8 / time
 	log:info("Filtered %d packets, accepted %.2f%%.", match + discard, match / (match + discard) * 100)
 	log:info("Time elapsed: %.2f milliseconds", time * 1000)
 	log:info("%.2f Mpps, %.2f Gbit/s", pktRate / 10^6, dataRate / 10^9)
@@ -121,20 +129,22 @@ local function runTest(mem, memSize, numPkts, align, filter)
 end
 
 local function randomSize()
-	return math.random(60, 124)
+	return math.random(60, 508)
 	--return math.random(60, 92)
 end
 
-function allocIndex(size)
-    local mem = memory.allocHuge("uint8_t*", memSize)
-    local idx = memory.allocHuge("uint8_t*", memSize/64)
-    
-    return mem, idx
+function allocIndex(memSize)
+	if ffi.sizeof("struct packet_header **") ~= 8 then
+		log:error("unexpected pointer size %u", ffi.sizeof("struct packet_header **"))
+	end
+	local mem = memory.allocHuge("uint8_t*", memSize)
+	local idx = memory.allocHuge("struct packet_header **", 8 * memSize/(64 + headerSize)) -- uppper bound for min. size packets
+	return mem, idx
 end
 
 function master(args)
 	local align =
-		   args.packed and noAlign
+		args.packed and noAlign
 		or args.l2Aligned and alignL2
 		or args.l3Aligned and alignL3
 		or args.evenAligned and alignEven
@@ -142,15 +152,16 @@ function master(args)
 		or args.NAligned and function(num) return align(num, args.alignment) + args.offset end
 		or error("no alignment specified")
 	local memSize = args.memory * 2^30
-	local mem = memory.allocHuge("uint8_t*", memSize)
+	local mem, idx = allocIndex(memSize)
 	local template, templatePkt = makeTemplate()
 	local i = 0
 	local numPkts = 0
+	local numData = 0
 	log:info("Header size: %d", headerSize)
 	for i,v in pairs({0,1,2,3,4,7,8,9,15,16}) do
 		log:info("align(%d) = %d", v, tonumber(align(v)))
 	end
-	log:info("Generating packets in memory.")
+	log:info("Generating packets in memory")
 	while true do
 		local size = args.fixedSize or randomSize()
 		i = align(i)
@@ -165,10 +176,25 @@ function master(args)
 		--templatePkt:calculateIp4Checksum()
 		local pkt = packetType(voidPtr(mem + i))
 		pkt.length = size
+		pkt.metadata = 0xdeadbeef
 		ffi.copy(pkt.data, template, 48) -- headers are sufficient, other stuff is zero-initialized
+		if mem[align(0)] ~= 0xef then
+			log:error("Memory corruption detected, numPkts: %i", numPkts)
+			print("Mem", mem)
+			print("idx", idx, idx[numPkts])
+			print("pkt", pkt, pkt.data)
+			print("i", i)
+			print("idx > mem:", voidPtr(idx[numPkts]) >= voidPtr(mem))
+			dumpHex(mem, 64)
+			break
+		end
 		i = i + size + headerSize
+		idx[numPkts] = pkt
 		numPkts = numPkts + 1
+		numData = numData + size
 	end
+	
+	log:info("Done, #%i", numPkts)
 	local times, pktRates, dataRates = {}, {}, {}
 	--(require"jit.dump").on()
 	local filter_fn = pf.compile_filter(args.filter)
@@ -178,7 +204,7 @@ function master(args)
 	end
 	for i = 1, args.runs do
 		log:info("Running test run %d/%d", i, args.runs)
-		local time, pktRate, dataRate = runTest(mem, memSize, numPkts, align, filter_fn)
+		local time, pktRate, dataRate = runTest(mem, idx, numPkts, numData,align, filter_fn)
 		times[#times + 1] = time * 1000 -- ms
 		pktRates[#pktRates + 1] = pktRate / 10^6 -- mpps
 		dataRates[#dataRates + 1] = dataRate / 10^9 -- gbit

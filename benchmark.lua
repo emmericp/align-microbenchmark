@@ -8,6 +8,7 @@ local pf = require "pf"
 local ffi = require "ffi"
 local stats = require "stats"
 local jit = require "jit"
+local dist = require "dist"
 require "utils"
 
 -- we don't want dpdk
@@ -31,6 +32,9 @@ function configure(parser)
 		parser:flag("--b8-aligned", "Align at 8-byte boundaries."):target("B8Aligned"),
 		parser:flag("--n-aligned", "Align at N-byte boundaries."):target("NAligned")
 		
+	)
+	parser:mutex(
+		parser:flag("--lrz", "Use packet distribution from LRZ uplink")
 	)
 	args = parser:parse()
 	-- TODO: argparse should be able to enforce this somehow
@@ -129,8 +133,7 @@ local function runTest(mem, idx, numPkts, numData, align, filter)
 end
 
 local function randomSize()
-	return math.random(60, 508)
-	--return math.random(60, 92)
+	return math.random(60, 1514)
 end
 
 function allocIndex(memSize)
@@ -161,9 +164,14 @@ function master(args)
 	for i,v in pairs({0,1,2,3,4,7,8,9,15,16}) do
 		log:info("align(%d) = %d", v, tonumber(align(v)))
 	end
+	local sizeFn =
+		args.lrz and function() return dist.LRZDist() end
+		or args.fixedSize and function() return args.fixedSize end
+		or randomSize
 	log:info("Generating packets in memory")
 	while true do
-		local size = args.fixedSize or randomSize()
+		local size = sizeFn()
+		--local size = args.fixedSize or randomSize()
 		i = align(i)
 		if i + size + headerSize > memSize then
 			break

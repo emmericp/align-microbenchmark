@@ -92,7 +92,7 @@ local function align(num, boundary, offset)
 	offset = offset or 0
 	boundary = boundary or 1
 	-- return (num + boundary - 1) & ~(boundary - 1)
-	return bit.band(num + boundary - 1ULL, bit.bnot(boundary - 1ULL))
+	return return bit.band(num + boundary - offset - 1ULL, bit.bnot(boundary - 1ULL)) + offset
 end
 
 local voidPtr = ffi.typeof("void*")
@@ -152,7 +152,7 @@ function master(args)
 		or args.l3Aligned and alignL3
 		or args.evenAligned and alignEven
 		or args.B8Aligned and align8
-		or args.NAligned and function(num) return align(num, args.alignment) + args.offset end
+		or args.NAligned and function(num) return align(num, args.alignment, args.offset) end
 		or error("no alignment specified")
 	local memSize = args.memory * 2^30
 	local mem, idx = allocIndex(memSize)

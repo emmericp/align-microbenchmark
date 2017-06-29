@@ -15,15 +15,20 @@ require "utils"
 -- we don't want dpdk
 lm.config.skipInit = true
 
+local jit = require "jit"
+jit.opt.start("maxrecord=10000", "maxirconst=1000", "loopunroll=40")
+
 math.randomseed(0) -- deterministic, please
 
 function configure(parser)
 	parser:option("-m --memory", "Memory size in GB."):default("1"):convert(tonumber)
 	parser:option("-f --filter", "pcap filter to use."):default("host 10.0.0.0")
-	parser:option("--fixed-size", "Use a fixed packet size instead of a realistic distribution."):target("fixedSize"):convert(tonumber)
 	parser:option("-r --runs", "Repeat the test n times."):default("1"):convert(tonumber)
 	parser:option("--alignment", "Align to Nth byte."):default("1"):convert(tonumber)
 	parser:option("--offset", "Move alignment by n bytes."):default("0"):convert(tonumber)
+	parser:option("--traffic", "Traffic pattern to use."):default("uniform")
+	parser:option("--vary", "Packet field to modify."):default("ethertype")
+	parser:flag("--robot", "Print results in csv format.")
 	parser:flag("--null-filter", "Overwrites filter with catchall."):target("NullFilter")
 	parser:mutex(
 		parser:flag("--packed", "No alignment"),
@@ -32,10 +37,6 @@ function configure(parser)
 		parser:flag("--even-aligned", "Align at 2-byte boundaries."):target("evenAligned"),
 		parser:flag("--b8-aligned", "Align at 8-byte boundaries."):target("B8Aligned"),
 		parser:flag("--n-aligned", "Align at N-byte boundaries."):target("NAligned")
-		
-	)
-	parser:mutex(
-		parser:flag("--lrz", "Use packet distribution from LRZ uplink")
 	)
 	args = parser:parse()
 	-- TODO: argparse should be able to enforce this somehow
@@ -61,9 +62,6 @@ local function makeTemplate()
 	local pkt = packet.getUdp4Packet(mem)
 	pkt:fill{ ip4Src = "10.0.0.1", ip4Dst = "0.0.0.0", udpSrc = 1234, udpDst = 5678 }
 	pkt:calculateIp4Checksum()
-	log:info("Base packet looks like this:")
-	pkt:dump()
-	log:info("The destination address will use a random high byte")
 	return mem:getData(), pkt
 end
 
@@ -127,9 +125,11 @@ local function runTest(mem, idx, numPkts, numData, align, filter)
 	end
 	local pktRate = (match + discard) / time
 	local dataRate = numData * 8 / time
-	log:info("Filtered %d packets, accepted %.2f%%.", match + discard, match / (match + discard) * 100)
-	log:info("Time elapsed: %.2f milliseconds", time * 1000)
-	log:info("%.2f Mpps, %.2f Gbit/s", pktRate / 10^6, dataRate / 10^9)
+	if not args.robot then
+		log:info("Filtered %d packets, accepted %.2f%%.", match + discard, match / (match + discard) * 100)
+		log:info("Time elapsed: %.2f milliseconds", time * 1000)
+		log:info("%.2f Mpps, %.2f Gbit/s", pktRate / 10^6, dataRate / 10^9)
+	end
 	return time, pktRate, dataRate
 end
 
@@ -161,36 +161,42 @@ function master(args)
 	local i = 0
 	local numPkts = 0
 	local numData = 0
-	log:info("Header size: %d", headerSize)
-	for i,v in pairs({0,1,2,3,4,7,8,9,15,16}) do
-		log:info("align(%d) = %d", v, tonumber(align(v)))
+	if not args.robot then
+		log:info("Base packet looks like this:")
+		templatePkt:dump()
+		log:info("The destination address will use a random high byte")
+		log:info("Header size: %d", headerSize)
+		for i,v in pairs({0,1,2,3,4,7,8,9,15,16}) do
+			log:info("align(%d) = %d", v, tonumber(align(v)))
+		end
 	end
-	local sizeFn =
-		args.lrz and function() return dist.LRZDist() end
-		or args.fixedSize and function() return args.fixedSize end
-		or randomSize
-	log:info("Generating packets in memory")
+	local trafficSizeFn =
+		args.traffic == "lrz" and function() return dist.LRZDist() end
+		or args.traffic == "uniform" and randomSize
+		or tonumber(args.traffic) ~= nil and function() return tonumber(args.traffic) end
+		or error("invalid traffic pattern specified")
+	if not args.robot then
+		log:info("Generating packets in memory")
+	end
 	while true do
-		local size = sizeFn()
-		--local size = args.fixedSize or randomSize()
+		local size = trafficSizeFn()
 		i = align(i)
 		if i + size + headerSize > memSize then
 			break
 		end
 		templatePkt:setLength(size)
--- 		if math.random(0, 1000) == 0 then
-			--templatePkt.eth:setType(eth.TYPE_IP6)
-			--templatePkt.eth:setDstString("07:08:09:0a:0b:0c")
-			--templatePkt.ip4.dst.uint8[0] = 1
--- 		else
-			--templatePkt.eth:setType(eth.TYPE_IP)
-			--templatePkt.eth:setDstString("06:0a:05:ff:00:ee")
-			--templatePkt.ip4.dst.uint8[0] = 0
--- 		end
-		-- random highest byte
-		templatePkt.ip4.dst.uint8[0] = math.random(0, 255)
-		--templatePkt.ip4.dst.uint8[1] = math.random(0, 255)
-		--pkt.ip4.dst.uint8[3] = math.random(0, 255)
+		if args.vary == "ethertype" then
+			if math.random(0, 1000) == 0 then
+				templatePkt.eth:setType(eth.TYPE_IP6)
+			else
+				templatePkt.eth:setType(eth.TYPE_IP)
+			end
+		elseif args.vary == "ip" then
+			templatePkt.ip4.dst.uint8[0] = math.random(0, 255)
+		elseif args.vary == "ip+port" then
+			templatePkt.ip4.dst.uint8[0] = math.random(0, 31)
+			templatePkt.udp:setDstPort(math.random(0, 15))
+		end
 		-- TODO: this is slow but the partial checksum update is not yet in mainline libmoon
 		--templatePkt:calculateIp4Checksum()
 		local pkt = packetType(voidPtr(mem + i))
@@ -212,8 +218,9 @@ function master(args)
 		numPkts = numPkts + 1
 		numData = numData + size
 	end
-	
-	log:info("Done, #%i", numPkts)
+	if not args.robot then
+		log:info("Done, #%i", numPkts)
+	end
 	local times, pktRates, dataRates = {}, {}, {}
 	--(require"jit.dump").on()
 	local filter_fn = pf.compile_filter(args.filter)
@@ -222,19 +229,31 @@ function master(args)
 		filter_fn = function(data, size) return false end
 	end
 	for i = 1, args.runs do
-		log:info("Running test run %d/%d", i, args.runs)
+		if not args.robot then
+			log:info("Running test run %d/%d", i, args.runs)
+		end
 		local time, pktRate, dataRate = runTest(mem, idx, numPkts, numData,align, filter_fn)
 		times[#times + 1] = time * 1000 -- ms
 		pktRates[#pktRates + 1] = pktRate / 10^6 -- mpps
 		dataRates[#dataRates + 1] = dataRate / 10^9 -- gbit
-		print()
+		if not args.robot then
+			print()
+		end
 		--jit.flush()
 	end
 	if args.runs > 1 then
-		log:info("Averages:")
-		log:info("Time: %.2f ms +/- %.2f ms", stats.average(times), stats.stdDev(times))
-		log:info("Packet rate: %.2f Mpps +/- %.2f Mpps", stats.average(pktRates), stats.stdDev(pktRates))
-		log:info("Data rate: %.2f Gbit/s +/- %.2f Gbit/s", stats.average(dataRates), stats.stdDev(dataRates))
+		if not args.robot then
+			log:info("Averages:")
+			log:info("Time: %.2f ms +/- %.2f ms", stats.average(times), stats.stdDev(times))
+			log:info("Packet rate: %.2f Mpps +/- %.2f Mpps", stats.average(pktRates), stats.stdDev(pktRates))
+			log:info("Data rate: %.2f Gbit/s +/- %.2f Gbit/s", stats.average(dataRates), stats.stdDev(dataRates))
+		else
+			local alignConf = tostring(args.alignment)
+			if args.offset ~= 0 then
+				alignConf = alignConf .. "+" .. tostring(args.offset)
+			end
+			print(string.format("%s,%f", alignConf, stats.average(pktRates)))
+		end
 	end
 end
 

@@ -47,8 +47,14 @@ function configure(parser)
 end
 
 ffi.cdef [[
-	struct __attribute__((__packed__)) packet_header {
+	struct __attribute__((__packed__)) packet_header_orig {
 		uint64_t metadata; // combination of timestamp and vlan tag in FlowScope
+		uint16_t length;
+		uint8_t data[]; // packet data, we will try to align either the l2 or the l3 header here
+	};
+	struct __attribute__((__packed__)) packet_header {
+		uint32_t metadata;
+		uint16_t _;
 		uint16_t length;
 		uint8_t data[]; // packet data, we will try to align either the l2 or the l3 header here
 	};

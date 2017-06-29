@@ -1,6 +1,7 @@
 #!./libmoon/build/libmoon
 
 local lm = require "libmoon"
+local eth = require "proto.ethernet"
 local log = require "log"
 local packet = require "packet"
 local memory = require "memory"
@@ -92,7 +93,7 @@ local function align(num, boundary, offset)
 	offset = offset or 0
 	boundary = boundary or 1
 	-- return (num + boundary - 1) & ~(boundary - 1)
-	return return bit.band(num + boundary - offset - 1ULL, bit.bnot(boundary - 1ULL)) + offset
+	return bit.band(num + boundary - offset - 1ULL, bit.bnot(boundary - 1ULL)) + offset
 end
 
 local voidPtr = ffi.typeof("void*")
@@ -141,7 +142,7 @@ function allocIndex(memSize)
 		log:error("unexpected pointer size %u", ffi.sizeof("struct packet_header **"))
 	end
 	local mem = memory.allocHuge("uint8_t*", memSize)
-	local idx = memory.allocHuge("struct packet_header **", 8 * memSize/(64 + headerSize)) -- uppper bound for min. size packets
+	local idx = memory.allocHuge("struct packet_header **", 8 * memSize/(60 + headerSize)) -- uppper bound for min. size packets
 	return mem, idx
 end
 
@@ -177,8 +178,18 @@ function master(args)
 			break
 		end
 		templatePkt:setLength(size)
+-- 		if math.random(0, 1000) == 0 then
+			--templatePkt.eth:setType(eth.TYPE_IP6)
+			--templatePkt.eth:setDstString("07:08:09:0a:0b:0c")
+			--templatePkt.ip4.dst.uint8[0] = 1
+-- 		else
+			--templatePkt.eth:setType(eth.TYPE_IP)
+			--templatePkt.eth:setDstString("06:0a:05:ff:00:ee")
+			--templatePkt.ip4.dst.uint8[0] = 0
+-- 		end
 		-- random highest byte
 		templatePkt.ip4.dst.uint8[0] = math.random(0, 255)
+		--templatePkt.ip4.dst.uint8[1] = math.random(0, 255)
 		--pkt.ip4.dst.uint8[3] = math.random(0, 255)
 		-- TODO: this is slow but the partial checksum update is not yet in mainline libmoon
 		--templatePkt:calculateIp4Checksum()

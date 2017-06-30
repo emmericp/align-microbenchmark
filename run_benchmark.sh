@@ -12,7 +12,7 @@ do
 	for traffic in uniform lrz
 	do
 		echo "# ${CPU} ${traffic} ${vary[$i]}" >> "benchmark_${CPU}_${traffic}_${vary[$i]}.csv"
-		for align in {1,2,4,8,64}
+		for align in {1,2,4,8,16,32,64}
 		do
 			./libmoon/build/libmoon benchmark.lua -r 100 -m $size -f "${filter[$i]}" --n-aligned --alignment $align --offset 0 --traffic=$traffic --vary="${vary[$i]}" --robot >> "benchmark_${CPU}_${traffic}_${vary[$i]}.csv"
 		done

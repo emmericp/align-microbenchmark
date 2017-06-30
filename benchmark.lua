@@ -144,7 +144,7 @@ local function randomSize()
 end
 
 function allocIndex(memSize)
-	if ffi.sizeof("struct packet_header **") ~= 8 then
+	if ffi.sizeof("struct packet_header **") ~= 8 and not args.robot then
 		log:error("unexpected pointer size %u", ffi.sizeof("struct packet_header **"))
 	end
 	local mem = memory.allocHuge("uint8_t*", memSize)

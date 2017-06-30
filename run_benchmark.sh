@@ -18,6 +18,7 @@ do
 		done
 		./libmoon/build/libmoon benchmark.lua -r 100 -m $size -f "${filter[$i]}" --n-aligned --alignment 4 --offset 2 --traffic=$traffic --vary="${vary[$i]}" --robot >> "benchmark_${CPU}_${traffic}_${vary[$i]}.csv"
 		./libmoon/build/libmoon benchmark.lua -r 100 -m $size -f "${filter[$i]}" --n-aligned --alignment 8 --offset 2 --traffic=$traffic --vary="${vary[$i]}" --robot >> "benchmark_${CPU}_${traffic}_${vary[$i]}.csv"
+		./libmoon/build/libmoon benchmark.lua -r 100 -m $size -f "${filter[$i]}" --n-aligned --alignment 64 --offset 2 --traffic=$traffic --vary="${vary[$i]}" --robot >> "benchmark_${CPU}_${traffic}_${vary[$i]}.csv"
 		./formatResults.py "benchmark_${CPU}_${traffic}_${vary[$i]}.csv"
 	done
 done

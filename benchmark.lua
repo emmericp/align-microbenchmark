@@ -153,6 +153,9 @@ function allocIndex(memSize)
 end
 
 function master(args)
+	if args.robot then
+		log:setLevel("ERROR")
+	end
 	local align =
 		args.packed and noAlign
 		or args.l2Aligned and alignL2

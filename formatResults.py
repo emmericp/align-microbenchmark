@@ -11,9 +11,9 @@ with open(sys.argv[1], newline='', encoding='utf-8') as csvfile:
         data.append(first)
         first = next(reader)
     reference = float(first[1])
-    data.append([first[0], 100])
+    data.append([first[0], 0])
     for row in reader:
-        data.append([row[0], 100. * float(row[1])/reference])
+        data.append([row[0], 100. * float(row[1])/reference - 100])
 
 with open(sys.argv[1].split(".")[0] + "_formated.csv", 'w', newline='') as f:
     writer = csv.writer(f, quoting=csv.QUOTE_MINIMAL)
